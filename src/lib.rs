@@ -1,30 +1,30 @@
 #![doc = include_str!("../README.md")]
 
+#[cfg(feature = "actix-web4")]
+mod actix;
+pub mod fkey;
 mod load;
+pub mod machine;
 
-use std::collections::{hash_map::ValuesMut, HashMap};
+use std::{
+    borrow::Borrow,
+    collections::{hash_map::ValuesMut, HashMap},
+};
 
-pub use fluent_bundle::{FluentArgs, FluentResource, FluentValue};
-use fluent_langneg::{negotiate_languages, parse_accepted_languages};
+pub use fluent_bundle::{FluentArgs, FluentError, FluentResource, FluentValue};
 
 pub use unic_langid::{subtags, LanguageIdentifier};
 
 pub use fluent_langneg::NegotiationStrategy;
 
-#[cfg(feature = "actix-web4")]
-use actix_web::{http::header::ACCEPT_LANGUAGE, HttpRequest};
-#[cfg(feature = "actix-web4")]
-use std::boxed::Box;
+pub use fkey::Fkey;
 
-pub type FluentBundle<R> =
-    fluent_bundle::bundle::FluentBundle<R, intl_memoizer::concurrent::IntlLangMemoizer>;
-
-#[cfg(feature = "actix-web4")]
-pub type TranslateFn<'a> = Box<dyn Fn(&'a str, Option<&'a FluentArgs>) -> String + 'a>;
+pub use machine::{FluentBundle, FluentMachine};
 
 /// A high level loader/api for [`fluent-bundle`]
 pub struct I18nStorage {
     bundles: HashMap<LanguageIdentifier, FluentBundle<FluentResource>>,
+    /// Available language bundles
     pub available: Vec<LanguageIdentifier>,
     fallback: LanguageIdentifier,
     #[cfg(feature = "actix-web4")]
@@ -32,7 +32,65 @@ pub struct I18nStorage {
     strategy: NegotiationStrategy,
 }
 
+impl FluentMachine for I18nStorage {
+    #[inline]
+    fn bundle_by_locale(
+        &self,
+        locale: &LanguageIdentifier,
+    ) -> Option<&FluentBundle<FluentResource>> {
+        self.bundles.get(locale)
+    }
+    #[inline]
+    fn get_supported_locales(&self) -> &[LanguageIdentifier] {
+        &self.available
+    }
+    #[inline]
+    fn get_fallback_locale(&self) -> &LanguageIdentifier {
+        &self.fallback
+    }
+    #[inline]
+    fn get_strategy(&self) -> NegotiationStrategy {
+        self.strategy
+    }
+}
+
 impl I18nStorage {
+    /// Create a [`I18nStorage`]
+    ///
+    /// Recursively walks through `locales_dir` expecting `{global}/{language}/{region}`
+    /// format expecting `language` and `region` to be a directory and valid tags.
+    /// for a path like:
+    /// - `locales/` -- all terms will be available
+    ///     - **`global.ftl`** global `messages` and `terms`
+    ///     > ```text
+    ///     > -company-name = Foo, inc.
+    ///     > ```
+    ///     - **`en/`** -- `language` directory, all files language contains `messages` and `terms`. The `terms` should be consistent to a region. Resolves to tag `en`.
+    ///         - **`sports.ftl`** default US English `terms` and messages
+    ///         > ```text
+    ///         > -soccer = Soccer
+    ///         > -football = Football
+    ///         > soccer = { -soccer } is the biggest sport in the world, with UEFA Champions League final 380 million viewers.
+    ///         > football = { -football } is the biggest North American sport, with Super Bowl 112.3 million viewers.
+    ///         > ```
+    ///         - **`UK/`** -- `region` directory. Generates `en-UK`.
+    ///             Will override parent language `terms` and `messages` to specific
+    ///             regional terms
+    ///             - **`overrides.ftl`** will override the previous `en` `terms`
+    ///             > ```text
+    ///             > -soccer = Football
+    ///             > -football = American Football
+    ///             > ```
+    ///         - **`US/`** -- `region` directory. Generates `en-US`.
+    ///             - **`overrides.ftl`** -- blank file to generate `en-US`
+    ///     - **`pt/`**
+    ///         - `..`
+    ///         - **`PT/`**
+    ///             - `..`
+    ///         - **`BR/`**
+    ///             - `..`
+    /// Generates `en` as base language, `en-US` and `en-UK` by overriding the
+    /// parent language.
     pub fn new(locales_dir: &str, default: String, strategy: NegotiationStrategy) -> Self {
         let bundles = load::load(locales_dir);
         Self::new_from_hm(bundles, default, strategy)
@@ -41,7 +99,7 @@ impl I18nStorage {
     /// Constructs bundles from strings
     /// ```
     /// use std::collections::HashMap;
-    /// use fi18n::{I18nStorage, NegotiationStrategy, LanguageIdentifier};
+    /// use fi18n::{I18nStorage, FluentMachine, NegotiationStrategy, LanguageIdentifier};
     ///
     /// let en_string = String::from("
     /// hello = Hi!
@@ -59,15 +117,18 @@ impl I18nStorage {
     /// let i18n = I18nStorage::new_from_hm(hm, "en".into(), NegotiationStrategy::Filtering);
     ///
     /// let en: LanguageIdentifier = "en".parse().unwrap();
-    /// assert_eq!(i18n.t(&en, "hello", None), "Hi!");
+    /// assert_eq!(i18n.t(&vec![&en], "hello".try_into().unwrap(), None), "Hi!");
     /// let pt: LanguageIdentifier = "pt".parse().unwrap();
-    /// assert_eq!(i18n.t(&pt, "goodbye", None), "Adeus!");
+    /// assert_eq!(i18n.t(&vec![&pt], "goodbye".try_into().unwrap(), None), "Adeus!");
     /// ```
-    pub fn new_from_hm(
-        hm: HashMap<String, Vec<String>>,
+    pub fn new_from_hm<T>(
+        hm: HashMap<String, Vec<T>>,
         default: String,
         strategy: NegotiationStrategy,
-    ) -> Self {
+    ) -> Self
+    where
+        T: Borrow<String>,
+    {
         let bundles = hm
             .iter()
             .map(|(k, xs)| {
@@ -75,8 +136,9 @@ impl I18nStorage {
                 (lang.clone(), {
                     let mut bundle = FluentBundle::new_concurrent(vec![lang]);
                     for s in xs {
+                        let res: &String = s.borrow();
                         bundle.add_resource_overriding(
-                            FluentResource::try_new(s.clone())
+                            FluentResource::try_new(res.into())
                                 .expect("Failed to parse the resource."),
                         );
                     }
@@ -114,10 +176,10 @@ impl I18nStorage {
 
     /// Provides a mutable iterator over bundles
     ///
-    /// Example add a function
+    /// Example add STRLEN function to all bundles
     /// ```
     /// use std::collections::HashMap;
-    /// use fi18n::{I18nStorage, FluentValue, NegotiationStrategy, LanguageIdentifier};
+    /// use fi18n::{I18nStorage, FluentValue, FluentMachine, NegotiationStrategy, LanguageIdentifier};
     ///
     /// let ftl_string = String::from("length = { STRLEN(\"12345\") }");
     ///
@@ -134,58 +196,10 @@ impl I18nStorage {
     ///        }).expect("Failed to add a function to the bundle.");
     /// }
     /// let en: LanguageIdentifier = "en".parse().unwrap();
-    /// assert_eq!(i18n.t(&en, "length", None), "5");
+    /// assert_eq!(i18n.t(&vec![&en], "length".try_into().unwrap(), None), "5");
     /// ```
-
     pub fn bundles_mut(&mut self) -> ValuesMut<LanguageIdentifier, FluentBundle<FluentResource>> {
         self.bundles.values_mut()
-    }
-
-    /// translates message to a locale, if message key has `.` returns the message attribute
-    #[inline]
-    pub fn t(&self, locale: &LanguageIdentifier, key: &str, args: Option<&FluentArgs>) -> String {
-        let bundle = self.bundles.get(locale).unwrap();
-        let mut path = key.split('.');
-        let message = bundle
-            .get_message(path.next().unwrap())
-            .expect("Failed to retrieve a message.");
-
-        let pattern = if let Some(attr) = path.next() {
-            message.get_attribute(attr).unwrap().value()
-        } else {
-            message.value().expect("Failed to parse pattern")
-        };
-        bundle
-            .format_pattern(pattern, args, &mut vec![])
-            .to_string()
-    }
-
-    /// Parses `language-range`, matches with current available languages returning the [`LanguageIdentifier`].
-    #[inline]
-    pub fn negotiate_languages(&self, requested: &str) -> &LanguageIdentifier {
-        negotiate_languages(
-            &parse_accepted_languages(requested),
-            &self.available,
-            Some(&self.fallback),
-            self.strategy,
-        )
-        .first()
-        .unwrap()
-        // .clone()
-    }
-
-    /// Actix helper function to translate to resolved to local
-    #[cfg(feature = "actix-web4")]
-    #[inline]
-    pub fn from_request_tanslate(&self, request: &HttpRequest) -> TranslateFn<'_> {
-        let lang = self.negotiate_languages(
-            request
-                .headers()
-                .get(ACCEPT_LANGUAGE)
-                .map(|h| h.to_str().unwrap())
-                .unwrap_or(&self.fallback_string),
-        );
-        Box::new(move |key, options| self.t(&lang, key, options))
     }
 }
 
@@ -215,23 +229,21 @@ macro_rules! f_args {
 
 #[cfg(test)]
 mod tests {
-    use super::{f_args, I18nStorage, LanguageIdentifier, NegotiationStrategy};
-    #[cfg(feature = "actix-web4")]
-    use actix_web::test::TestRequest;
+    use super::{f_args, FluentMachine, I18nStorage, LanguageIdentifier, NegotiationStrategy};
     #[test]
     fn i18n_translate_us() {
         let i18n = I18nStorage::new("locales/", "en-Us".into(), NegotiationStrategy::Filtering);
 
         let lang = i18n.negotiate_languages(&"de-AT;0.9,de-DE;0.8,de;0.7;en-US;0.5");
-        assert_eq!(lang, &"en-US".parse::<LanguageIdentifier>().unwrap());
+        assert_eq!(lang, vec![&"en-US".parse::<LanguageIdentifier>().unwrap()]);
         assert_eq!(
-            i18n.t(&lang, "i-am", None),
+            i18n.t(&lang, "i-am".try_into().unwrap(), None),
             "I am a \u{2068}person.\u{2069}"
         );
         assert_eq!(
             i18n.t(
                 &lang,
-                "i-am",
+                "i-am".try_into().unwrap(),
                 Some(&f_args![
                     "gender" => "masculine"
                 ])
@@ -242,7 +254,7 @@ mod tests {
         assert_eq!(
             i18n.t(
                 &lang,
-                "movie-list",
+                "movie-list".try_into().unwrap(),
                 Some(&f_args![
                     "movies" => 1,
                     "username" => "Foo"
@@ -253,7 +265,7 @@ mod tests {
         assert_eq!(
             i18n.t(
                 &lang,
-                "movie-list",
+                "movie-list".try_into().unwrap(),
                 Some(&f_args![
                     "movies" => 10,
                     "username" => "Foo"
@@ -267,16 +279,26 @@ mod tests {
     fn i18n_translate_pt() {
         let i18n = I18nStorage::new("locales/", "en-Us".into(), NegotiationStrategy::Filtering);
 
-        let lang = i18n.negotiate_languages("de-AT;0.9,pt-PT;0.8,de;0.7;en-US;0.5");
-        assert_eq!(lang, &"pt-PT".parse::<LanguageIdentifier>().unwrap());
+        let lang = i18n.negotiate_languages("de-AT;0.9,pt-PT;0.8,de;0.7;en-US;0.5,en");
         assert_eq!(
-            i18n.t(&lang, "i-am", None),
+            lang,
+            vec![
+                &"pt-PT".parse::<LanguageIdentifier>().unwrap(),
+                &"pt".parse::<LanguageIdentifier>().unwrap(),
+                &"pt-BR".parse::<LanguageIdentifier>().unwrap(),
+                &"en".parse::<LanguageIdentifier>().unwrap(),
+                &"en-US".parse::<LanguageIdentifier>().unwrap(),
+                &"en-UK".parse::<LanguageIdentifier>().unwrap(),
+            ]
+        );
+        assert_eq!(
+            i18n.t(&lang, "i-am".try_into().unwrap(), None),
             "Eu sou \u{2068}uma pessoa.\u{2069}"
         );
         assert_eq!(
             i18n.t(
                 &lang,
-                "i-am",
+                "i-am".try_into().unwrap(),
                 Some(&f_args![
                     "gender" => "masculine"
                 ])
@@ -286,7 +308,7 @@ mod tests {
         assert_eq!(
             i18n.t(
                 &lang,
-                "i-am",
+                "i-am".try_into().unwrap(),
                 Some(&f_args![
                     "gender" => "feminine"
                 ])
@@ -294,13 +316,13 @@ mod tests {
             "Eu sou \u{2068}uma rapariga.\u{2069}"
         );
         assert_eq!(
-            i18n.t(&lang, "movie-list", None),
+            i18n.t(&lang, "movie-list".try_into().unwrap(), None),
             "Tu tens \u{2068}um filme\u{2069} para ver."
         );
         assert_eq!(
             i18n.t(
                 &lang,
-                "movie-list",
+                "movie-list".try_into().unwrap(),
                 Some(&f_args![
                     "movies" => 1
                 ])
@@ -310,7 +332,7 @@ mod tests {
         assert_eq!(
             i18n.t(
                 &lang,
-                "movie-list",
+                "movie-list".try_into().unwrap(),
                 Some(&f_args![
                     "movies" => 10
                 ])
@@ -318,12 +340,15 @@ mod tests {
             "Tu tens \u{2068}\u{2068}10\u{2069} filmes\u{2069} para ver."
         );
         assert_eq!(
-            i18n.t(&lang, "login", None),
+            i18n.t(&lang, "login".try_into().unwrap(), None),
             "Iniciar sessão em Example ORG"
         );
-        assert_eq!(i18n.t(&lang, "login.username", None), "Utilizador");
         assert_eq!(
-            i18n.t(&lang, "login.help-text", None),
+            i18n.t(&lang, "login.username".try_into().unwrap(), None),
+            "Utilizador"
+        );
+        assert_eq!(
+            i18n.t(&lang, "login.help-text".try_into().unwrap(), None),
             "Entre o seu nome de utilizador"
         );
     }
@@ -332,16 +357,24 @@ mod tests {
     fn i18n_translate_br() {
         let i18n = I18nStorage::new("locales/", "en-Us".into(), NegotiationStrategy::Filtering);
 
-        let lang = i18n.negotiate_languages(&"pt-BR;0.9,pt-PT;0.8,de;0.7;en-US;0.5");
-        assert_eq!(lang, &"pt-BR".parse::<LanguageIdentifier>().unwrap());
+        let lang = i18n.negotiate_languages(&"pt-BR;0.9,pt-PT;0.8,de;0.7;en-US");
         assert_eq!(
-            i18n.t(&lang, "i-am", None),
+            lang,
+            vec![
+                &"pt-BR".parse::<LanguageIdentifier>().unwrap(),
+                &"pt".parse::<LanguageIdentifier>().unwrap(),
+                &"pt-PT".parse::<LanguageIdentifier>().unwrap(),
+                &"en-US".parse::<LanguageIdentifier>().unwrap(),
+            ]
+        );
+        assert_eq!(
+            i18n.t(&lang, "i-am".try_into().unwrap(), None),
             "Eu sou \u{2068}uma pessoa.\u{2069}"
         );
         assert_eq!(
             i18n.t(
                 &lang,
-                "i-am",
+                "i-am".try_into().unwrap(),
                 Some(&f_args![
                     "gender" => "masculine"
                 ])
@@ -351,7 +384,7 @@ mod tests {
         assert_eq!(
             i18n.t(
                 &lang,
-                "i-am",
+                "i-am".try_into().unwrap(),
                 Some(&f_args![
                     "gender" => "feminine"
                 ])
@@ -359,13 +392,13 @@ mod tests {
             "Eu sou \u{2068}uma menina.\u{2069}"
         );
         assert_eq!(
-            i18n.t(&lang, "movie-list", None),
+            i18n.t(&lang, "movie-list".try_into().unwrap(), None),
             "Você tem \u{2068}um filme\u{2069} para ver."
         );
         assert_eq!(
             i18n.t(
                 &lang,
-                "movie-list",
+                "movie-list".try_into().unwrap(),
                 Some(&f_args![
                     "movies" => 1
                 ])
@@ -375,7 +408,7 @@ mod tests {
         assert_eq!(
             i18n.t(
                 &lang,
-                "movie-list",
+                "movie-list".try_into().unwrap(),
                 Some(&f_args![
                     "movies" => 10
                 ])
@@ -383,27 +416,16 @@ mod tests {
             "Você tem \u{2068}\u{2068}10\u{2069} filmes\u{2069} para ver."
         );
         assert_eq!(
-            i18n.t(&lang, "login", None),
+            i18n.t(&lang, "login".try_into().unwrap(), None),
             "Iniciar sessão em Example ORG"
         );
-        assert_eq!(i18n.t(&lang, "login.username", None), "Usuário");
         assert_eq!(
-            i18n.t(&lang, "login.help-text", None),
+            i18n.t(&lang, "login.username".try_into().unwrap(), None),
+            "Usuário"
+        );
+        assert_eq!(
+            i18n.t(&lang, "login.help-text".try_into().unwrap(), None),
             "Entre o seu nome de usuário"
         );
-    }
-    #[cfg(feature = "actix-web4")]
-    #[cfg_attr(feature = "actix-web4", actix_web::test)]
-    async fn actix_request_tansltate_fn() {
-        let i18n = I18nStorage::new("locales/", "en-US".into(), NegotiationStrategy::Filtering);
-        let t = i18n.from_request_tanslate(
-            &TestRequest::get()
-                .insert_header((
-                    actix_web::http::header::ACCEPT_LANGUAGE,
-                    "en-US;0.9,de-DE;0.8,de;0.7;en-US;0.5",
-                ))
-                .to_http_request(),
-        );
-        assert_eq!(t("i-am", None), "I am a \u{2068}person.\u{2069}");
     }
 }

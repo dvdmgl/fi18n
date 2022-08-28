@@ -1,13 +1,25 @@
-use std::{collections::HashMap, fs};
+use std::{cmp::Ordering, collections::HashMap, fs};
 use walkdir::WalkDir;
 
 pub(super) fn load(locales_dir: &str) -> HashMap<String, Vec<String>> {
     let walker = WalkDir::new(locales_dir)
-        .sort_by(|a, b| b.file_name().len().cmp(&a.file_name().len()))
-        .into_iter();
+        .contents_first(false)
+        .sort_by(|a, b| match b.depth().cmp(&a.depth()) {
+            Ordering::Equal => {
+                if b.file_type().is_dir() {
+                    Ordering::Less
+                } else {
+                    Ordering::Greater
+                }
+            }
+            Ordering::Less => Ordering::Less,
+            Ordering::Greater => Ordering::Greater,
+        })
+        .into_iter()
+        .flatten();
     let mut global_fluent: Vec<String> = vec![];
     let mut files: HashMap<String, Vec<String>> = HashMap::new();
-    for entry in walker.flatten() {
+    for entry in walker {
         let path = entry.path();
         let parts: Vec<&str> = path.iter().skip(1).map(|x| x.to_str().unwrap()).collect();
         match parts[..] {
