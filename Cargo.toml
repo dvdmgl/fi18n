@@ -1,6 +1,6 @@
 [package]
 name = "fi18n"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 repository = "https://github.com/dvdmgl/fi18n.git"
 authors = ["David Miguel <dvdmgl@gmail.com>"]
@@ -8,25 +8,29 @@ keywords = ["actix", "localization", "l10n", "i18n", "intl", "internationalizati
 categories = ["localization", "internationalization"]
 readme = "README.md"
 
-
 [lib]
 name = "fi18n"
 path = "src/lib.rs"
 
 [dependencies]
-walkdir = "2.3"
 unic-langid = "0.9"
 fluent-bundle = { version = "0.15" }
-actix-web = { version = "4.1", default-features = false, features = ["macros"], optional = true }
+fluent-syntax = "0.11.0"
+actix-web = { version = "4.2", default-features = false, features = ["cookies"], optional = true }
 intl-memoizer = "0.5"
 fluent-langneg = "0.13"
+thiserror = "1"
+log = "0.4"
+ahash = "0.8.0"
 
 [features]
 default = ["with-title"]
 actix-web4 = ["dep:actix-web"]
 with-title = []
 
-
 [package.metadata.docs.rs]
 all-features = true
 rustdoc-args = ["--cfg", "docsrs"]
+
+[dev-dependencies]
+actix-web = { version = "4.2", default-features = false, features = ["macros", "cookies"] }

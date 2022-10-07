@@ -1,145 +1,72 @@
-fi18n combines:
+fi18n is a work in progress to simplify [Project Fluent](https://projectfluent.org/) ecosystem into
+a simple easy to use API with [`builders`] and [`loaders`]:
 
 * [`fluent-bundle`](https://crates.io/crates/fluent-bundle) - Fluent bundle
 * [`fluent-langneg`](https://crates.io/crates/fluent-langneg) - Perform language negotiation
 * [`unic-langid`](https://crates.io/crates/unic-langid) - Language Identifier
 
-into a small a high level api/loader to simplify the usage of [Project Fluent](https://projectfluent.org/).
+into an high level api [`FluentMachine`], with 2 builders and a directory loader to simplify the usage of [Project Fluent](https://projectfluent.org/).
 
-Takes advantage of fluent [`overriding`](fluent_bundle::FluentBundle::add_resource_overriding)
-to construct a more DRYer natural translations, using isolation of resources in a
-path structure `{global}/{language}/{region}/`.
+# Example
+```rust
+use fi18n::{f_args, FluentMachine, loaders::DirectoryLoader};
 
-### Features:
-- **with-title**: TITLE function
-- **actix-web4**: [`actix-web`](actix-web) support [`I18nStorage::from_request_tanslate`]
+let i18n = FluentMachine::build_loader(DirectoryLoader::new("examples/locales/"))
+    .unwrap()
+    .set_fallback_locale("en-US")
+    .expect("failed to parse locale")
+    .finish()
+    .expect("failed to create FluentMachine");
 
+let locale_us = i18n.localize_t("en-US");
+let locale_uk = i18n.localize_t("en-UK");
+let locale_pt = i18n.localize_t("pt-PT");
+let locale_br = i18n.localize_t("pt-BR");
+let locale_jp = i18n.localize_t("jp");
 
-- `global` - is used in as shared resource.
-- `language` - base language that should be a consistent language, `terms` that can be overridden in region.
-Should contain the language messages to default language without region, with `terms` that will be overridden in region specification.
-- `region` - specific `terms` or `messages` for the region, overwrites the parent language.
-
-## Example folder and file structure
-
-```text
-locales/
-    - global.ftl
-    en/
-        - login.ftl
-        - movie.ftl
-        US/
-            - overrides.ftl
-        UK/
-            - overrides.ftl
-    pt/
-        ..
-        BR/
-            ..
-        PT/
-            ..
-```
-
-<!-- using <pre> as rust doc removes fluent comments -->
-
-- `locales/global.ftl`
-
-<pre>
-brand-name = Example ORG
-</pre>
-
-Global `messages` and `terms` used in all translations, ex: `brand-name`.
-
-- `locales/en/movie.ftl`
-
-<pre>
-# base language: en-US
--movie = movie
-
-movie-list = { $username }, you have { $movies ->
-       *[one] one { -movie }
-        [other] { $movies } { -movie }s
-    } to watch in { brand-name }.
-    .title = { TITLE(-movie) }s list
-</pre>
-
-Declare `-movie` as a private `term` in US English is _movie_, as in UK English is _film_.
-
-- `locales/en/UK/overrides.ftl`
-
-<pre>
--movie = film
-</pre>
-
-Specific language `terms` to a UK English, overwrites the previous `en` `-movie` `term` to UK English _film_.
-
-
-- `locales/en/US/overrides.ftl`
-<pre>
-# kept blank to generate en-US region, there are no need for overwrites, as the `en` languages is in en-US
-</pre>
-
-
-```
-use fi18n::{f_args, FluentValue, I18nStorage, NegotiationStrategy, LanguageIdentifier};
-
-// read locales from folder
-let mut i18n = I18nStorage::new("locales/", "en-Us".into(), NegotiationStrategy::Filtering);
-
-// add a function to bundles
-for bundle in i18n.bundles_mut() {
-    bundle
-        .add_function("STRLEN", |positional, _named| match positional {
-            [FluentValue::String(str)] => str.len().into(),
-            _ => FluentValue::Error,
-        }).expect("Failed to add a function to the bundle.");
-}
-
-// en-US
-let en_us = "en-US".parse::<LanguageIdentifier>().unwrap();
 assert_eq!(
-    i18n.t(
-        &vec![&en_us],
-        "movie-list",
-        Some(&f_args![
-            "movies" => 1,
-            "username" => "Foo",
-        ])
-    ),
-    "\u{2068}Foo\u{2069}, you have \u{2068}one movie\u{2069} to watch in Example ORG."
+    locale_uk("football".try_into().unwrap(), None),
+    "American Football is the biggest North American sport, with Super Bowl 112.3 million viewers.",
+    "let's call American Football, whatever that is",
 );
-// accessing title attribute and use TITLE function
 assert_eq!(
-    i18n.t(
-        &vec![&en_us],
-        // you can access the title attribute using `.`
-        "movie-list.title",
-        None
-    ),
-    "\u{2068}Movie\u{2069}s list"
+    locale_jp("soccer".try_into().unwrap(), None),
+    "Soccer is the biggest sport in the world, with UEFA Champions League final 380 million viewers.",
+    "fallback is en-US",
+);    
+assert_eq!(
+    locale_us("soccer".try_into().unwrap(), None),
+    "Soccer is the biggest sport in the world, with UEFA Champions League final 380 million viewers.",
+    "Americans call football soccer",
 );
-
-// en-UK
-let en_uk = "en-UK".parse::<LanguageIdentifier>().unwrap();
 assert_eq!(
-    i18n.t(
-        &vec![&en_uk],
-        "movie-list",
-        Some(&f_args![
-            "movies" => 5,
-            "username" => "Foo",
-        ])
-    ),
-    "\u{2068}Foo\u{2069}, you have \u{2068}\u{2068}5\u{2069} films\u{2069} to watch in Example ORG."
+    locale_uk("soccer".try_into().unwrap(), None),
+    "Football is the biggest sport in the world, with UEFA Champions League final 380 million viewers.",
+    "English call football, football",
 );
-// accessing title attribute and use TITLE function
 assert_eq!(
-    i18n.t(
-        &vec![&en_uk],
-        // you can access the title attribute using `.`
-        "movie-list.title",
-        None
-    ),
-    "\u{2068}Film\u{2069}s list"
+    locale_pt("soccer".try_into().unwrap(), None),
+    "Futebol é o maior desporto do mundo, com os 380 milhões de telespectadores na final da Liga dos Campeões.",
+    "Champions League in Portuguese is Liga dos Campeões",
+);
+assert_eq!(
+    locale_br("soccer".try_into().unwrap(), None),
+    "Futebol é o maior desporto do mundo, com os 380 milhões de telespectadores na final da Champions League.",
+    "Champions League in Brazil is Champions League... didn't they speak Portuguese?",
+);
+assert_eq!(
+    locale_us("login.not-found".try_into().unwrap(), Some(&f_args!["username" => "nobody"])),
+    "\u{2068}Username\u{2069} \u{2068}nobody\u{2069} not found.",
+    "attributes and arguments",
+);
+assert_eq!(
+    locale_pt("login.not-found".try_into().unwrap(), Some(&f_args!["username" => "nobody"])),
+    "\u{2068}Utilizador\u{2069} \u{2068}nobody\u{2069} não encontrado.",
+    "attributes and arguments",
+);
+assert_eq!(
+    locale_br("login.not-found".try_into().unwrap(), Some(&f_args!["username" => "nobody"])),
+    "\u{2068}Usuário\u{2069} \u{2068}nobody\u{2069} não encontrado.",
+    "attributes and arguments, usuário as Brazilian",
 );
 ```
