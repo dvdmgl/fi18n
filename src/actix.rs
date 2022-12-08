@@ -1,5 +1,7 @@
 use actix_web::{http::header::ACCEPT_LANGUAGE, HttpRequest};
-use std::boxed::Box;
+use std::sync::Arc;
+
+use crate::machine::TranslateFnSend;
 
 use super::{machine::TranslateFn, FluentMachine, LanguageIdentifier};
 
@@ -69,6 +71,31 @@ impl FluentMachine {
             }
         }
         self.localize_t(
+            request
+                .headers()
+                .get(ACCEPT_LANGUAGE)
+                .map(|h| h.to_str().unwrap())
+                .unwrap_or(&self.fallback_string),
+        )
+    }
+    #[inline]
+    #[cfg_attr(docsrs, doc(cfg(feature = "actix-web4")))]
+    /// as [`from_request_tanslate`] but `Send`
+    pub fn from_request_tanslate_sync(&self, request: &HttpRequest) -> TranslateFnSend<'_> {
+        if let Some(cookie_name) = &self.cookie_name {
+            if let Some(lang) = request
+                .cookie(&cookie_name)
+                .map(|f| String::from(f.value()))
+            {
+                match lang.parse::<LanguageIdentifier>() {
+                    Ok(lang) if self.available.contains(&lang) => {
+                        return Arc::new(move |key, options| self.t(&[&lang], key, options))
+                    }
+                    _ => (),
+                }
+            }
+        }
+        self.localize_t_send(
             request
                 .headers()
                 .get(ACCEPT_LANGUAGE)

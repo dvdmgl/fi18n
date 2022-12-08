@@ -1,6 +1,6 @@
 [package]
 name = "fi18n"
-version = "0.2.0"
+version = "0.3.0"
 edition = "2021"
 repository = "https://github.com/dvdmgl/fi18n.git"
 authors = ["David Miguel <dvdmgl@gmail.com>"]
@@ -15,13 +15,13 @@ path = "src/lib.rs"
 [dependencies]
 unic-langid = "0.9"
 fluent-bundle = { version = "0.15" }
-fluent-syntax = "0.11.0"
+fluent-syntax = "0.11"
 actix-web = { version = "4.2", default-features = false, features = ["cookies"], optional = true }
 intl-memoizer = "0.5"
 fluent-langneg = "0.13"
 thiserror = "1"
 log = "0.4"
-ahash = "0.8.0"
+ahash = "0.8"
 
 [features]
 default = ["with-title"]

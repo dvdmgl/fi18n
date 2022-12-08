@@ -6,7 +6,7 @@ builders to simplify the configuration and generation of [`FluentMachine`](crate
 use ahash::RandomState;
 use fluent_bundle::{FluentArgs, FluentResource};
 use fluent_langneg::{negotiate_languages, parse_accepted_languages, NegotiationStrategy};
-use std::{collections::HashMap, sync::Arc};
+use std::{boxed::Box, collections::HashMap, sync::Arc};
 use unic_langid::LanguageIdentifier;
 
 use crate::{
@@ -24,6 +24,7 @@ pub type MachineBundle = fluent_bundle::bundle::FluentBundle<
 
 /// Localized translation function to locale(s)
 pub type TranslateFn<'a> = Box<dyn Fn(Fkey<'a>, Option<&'_ FluentArgs>) -> String + 'a>;
+pub type TranslateFnSend<'a> = Arc<dyn Fn(Fkey<'a>, Option<&'_ FluentArgs>) -> String + 'a>;
 
 pub(crate) type MachineBundles = HashMap<LanguageIdentifier, MachineBundle, RandomState>;
 
@@ -117,6 +118,13 @@ impl FluentMachine {
         let langs = self.negotiate_languages(locales);
 
         Box::new(move |key, options| self.t(&langs, key, options))
+    }
+
+    /// Localized translation function, with Send
+    #[inline]
+    pub fn localize_t_send(&self, locales: &str) -> TranslateFnSend<'_> {
+        let langs = self.negotiate_languages(locales);
+        Arc::new(move |key, options| self.t(&langs, key, options))
     }
 
     /// Parses `request` language preference filters and sorts with
