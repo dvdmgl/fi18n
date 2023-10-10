@@ -1,9 +1,26 @@
 use actix_web::{http::header::ACCEPT_LANGUAGE, HttpRequest};
-use std::sync::Arc;
-
-use crate::machine::TranslateFnSend;
+#[cfg(feature = "serde")]
+use serde::{Deserialize, Serialize};
 
 use super::{machine::TranslateFn, FluentMachine, LanguageIdentifier};
+
+#[cfg(feature = "actix-web4")]
+#[cfg_attr(feature = "serde", derive(Deserialize, Serialize))]
+#[derive(Clone, Debug)]
+pub struct LanguageCookieHeaders(pub Option<String>, pub Option<String>);
+
+impl std::fmt::Display for LanguageCookieHeaders {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        if let Some(h) = &self.0 {
+            write!(f, "{},", h)?;
+        }
+        if let Some(h) = &self.1 {
+            write!(f, "{},", h)
+        } else {
+            write!(f, "")
+        }
+    }
+}
 
 /// Implementation for actix-web
 #[cfg(feature = "actix-web4")]
@@ -78,30 +95,30 @@ impl FluentMachine {
                 .unwrap_or(&self.fallback_string),
         )
     }
+
+    /// async-graphql does not pass headers, workaround
     #[inline]
     #[cfg_attr(docsrs, doc(cfg(feature = "actix-web4")))]
-    /// as [`from_request_tanslate`] but `Send`
-    pub fn from_request_tanslate_sync(&self, request: &HttpRequest) -> TranslateFnSend<'_> {
-        if let Some(cookie_name) = &self.cookie_name {
-            if let Some(lang) = request
-                .cookie(&cookie_name)
-                .map(|f| String::from(f.value()))
-            {
-                match lang.parse::<LanguageIdentifier>() {
-                    Ok(lang) if self.available.contains(&lang) => {
-                        return Arc::new(move |key, options| self.t(&[&lang], key, options))
-                    }
-                    _ => (),
-                }
-            }
-        }
-        self.localize_t_send(
+    pub fn language_get_headers(&self, request: &HttpRequest) -> LanguageCookieHeaders {
+        LanguageCookieHeaders(
+            self.cookie_name
+                .as_ref()
+                .and_then(|cookie| request.cookie(&cookie))
+                .map(|val| val.value().to_string()),
             request
                 .headers()
                 .get(ACCEPT_LANGUAGE)
-                .map(|h| h.to_str().unwrap())
-                .unwrap_or(&self.fallback_string),
+                .and_then(|h| h.to_str().ok())
+                .map(|s| s.into()),
         )
+    }
+
+    /// async-graphql does not pass headers, workaround
+    #[inline]
+    pub fn localize_t_from_headers(&self, locales: &LanguageCookieHeaders) -> TranslateFn<'_> {
+        let langs = self.negotiate_languages(&locales.to_string());
+
+        Box::new(move |key, options| self.t(&langs, key, options))
     }
 }
 

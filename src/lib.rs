@@ -18,6 +18,9 @@ pub use error::Error;
 pub use fkey::Fkey;
 pub use machine::{FluentMachine, FluentMachineLoader, MachineBundle};
 
+#[cfg(feature = "actix-web4")]
+pub use actix::LanguageCookieHeaders;
+
 /// A helper macro to simplify creation of FluentArgs.
 ///
 /// # Example

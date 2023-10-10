@@ -23,8 +23,8 @@ pub type MachineBundle = fluent_bundle::bundle::FluentBundle<
 >;
 
 /// Localized translation function to locale(s)
-pub type TranslateFn<'a> = Box<dyn Fn(Fkey<'a>, Option<&'_ FluentArgs>) -> String + 'a>;
-pub type TranslateFnSend<'a> = Arc<dyn Fn(Fkey<'a>, Option<&'_ FluentArgs>) -> String + 'a>;
+pub type TranslateFn<'a> =
+    Box<dyn Fn(Fkey<'a>, Option<&'_ FluentArgs>) -> String + Send + Sync + 'a>;
 
 pub(crate) type MachineBundles = HashMap<LanguageIdentifier, MachineBundle, RandomState>;
 
@@ -118,13 +118,6 @@ impl FluentMachine {
         let langs = self.negotiate_languages(locales);
 
         Box::new(move |key, options| self.t(&langs, key, options))
-    }
-
-    /// Localized translation function, with Send
-    #[inline]
-    pub fn localize_t_send(&self, locales: &str) -> TranslateFnSend<'_> {
-        let langs = self.negotiate_languages(locales);
-        Arc::new(move |key, options| self.t(&langs, key, options))
     }
 
     /// Parses `request` language preference filters and sorts with
@@ -350,6 +343,31 @@ region = United States
         assert_eq!(
             i18n.t(&locales, "missing".try_into().unwrap(), None),
             "Missing on others"
+        );
+    }
+
+    #[test]
+    fn t_respects_negotiated_languages_order_add() {
+        let i18n = FluentMachine::build()
+            .add_resource_override("en", r#""#)
+            .expect("Should add en")
+            .add_resource_override("en-UK", r#""#)
+            .expect("Should add en-UK")
+            .add_resource_override("en-US", r#""#)
+            .expect("Should add en-US")
+            .add_resource_override("pt-PT", r#""#)
+            .expect("Should add pt-PT")
+            .finish()
+            .unwrap();
+        let locales = i18n.negotiate_languages("pt-PT, en-UK;1, en;0.8");
+        assert_eq!(
+            locales,
+            vec![
+                &"pt-PT".parse::<LanguageIdentifier>().unwrap(),
+                &"en-UK".parse::<LanguageIdentifier>().unwrap(),
+                &"en".parse::<LanguageIdentifier>().unwrap(),
+                &"en-US".parse::<LanguageIdentifier>().unwrap(),
+            ]
         );
     }
 
